@@ -1,0 +1,73 @@
+volumes:
+  postgres_data:
+  clickhouse_data:
+
+services:
+  postgres:
+    image: 'postgres:17'
+
+    environment:
+      POSTGRES_DB: '$POSTGRES_DB'
+      POSTGRES_USER: '$POSTGRES_USER'
+      POSTGRES_PASSWORD: '$POSTGRES_PASSWORD'
+    volumes:
+      - './scripts/postgres:/docker-entrypoint-initdb.d:ro'
+      - './source:/source:ro'
+      - 'postgres_data:/var/lib/postgresql/docker/17'
+
+  spark-master:
+    image: 'lab-2/spark:$SPARK_TAG'
+    build:
+      context: './images/spark'
+      args:
+        SPARK_TAG: '$SPARK_TAG'
+        CLICKHOUSE_SPARK_VERSION: '$SPARK_CLICKHOUSE_SPARK_VERSION'
+        CLICKHOUSE_RUNTIME_VERSION: '$SPARK_CLICKHOUSE_RUNTIME_VERSION'
+        CLICKHOUSE_JDBC_VERSION: '$SPARK_CLICKHOUSE_JDBC_VERSION'
+        POSTGRES_JDBC_VERSION: '$SPARK_POSTGRES_JDBC_VERSION'
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.master.Master --port 7077 --webui-port 8080
+    volumes:
+      - './scripts/spark:/jobs:ro'
+
+    ports:
+      - '${SPARK_MASTER_WEBUI_PORT:-8080}:8080'
+
+  spark-worker:
+    image: 'lab-2/spark:$SPARK_TAG'
+    build:
+      context: './images/spark'
+      args:
+        SPARK_TAG: '$SPARK_TAG'
+        CLICKHOUSE_SPARK_VERSION: '$SPARK_CLICKHOUSE_SPARK_VERSION'
+        CLICKHOUSE_RUNTIME_VERSION: '$SPARK_CLICKHOUSE_RUNTIME_VERSION'
+        CLICKHOUSE_JDBC_VERSION: '$SPARK_CLICKHOUSE_JDBC_VERSION'
+        POSTGRES_JDBC_VERSION: '$SPARK_POSTGRES_JDBC_VERSION'
+    command: >
+      /opt/spark/bin/spark-class org.apache.spark.deploy.worker.Worker spark://spark-master:7077 --webui-port 8081
+    
+    ports:
+      - '${SPARK_WORKER_WEBUI_PORT:-8081}:8081'
+
+    depends_on:
+      - 'spark-master'
+
+  clickhouse:
+    image: 'clickhouse/clickhouse-server:$CLICKHOUSE_TAG'
+
+    environment:
+      CLICKHOUSE_DEFAULT_ACCESS_MANAGEMENT: '1'
+      CLICKHOUSE_DB: '$CLICKHOUSE_DB'
+      CLICKHOUSE_USER: '$CLICKHOUSE_USER'
+      CLICKHOUSE_PASSWORD: '$CLICKHOUSE_PASSWORD'
+    volumes:
+      - './scripts/clickhouse:/docker-entrypoint-initdb.d:ro'
+      - 'clickhouse_data:/var/lib/clickhouse'
+
+    ports:
+      - '${CLICKHOUSE_WEBUI_PORT:-8123}:8123'
+
+    ulimits:
+      nofile:
+        soft: 262144
+        hard: 262144
