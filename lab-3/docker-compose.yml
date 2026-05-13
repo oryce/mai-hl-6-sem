@@ -1,0 +1,106 @@
+services:
+  kafka:
+    image: 'apache/kafka:$KAFKA_TAG'
+
+    environment:
+      KAFKA_NODE_ID: '1'
+      KAFKA_PROCESS_ROLES: 'broker,controller'
+      KAFKA_CONTROLLER_QUORUM_VOTERS: '1@kafka:9093'
+
+      KAFKA_LISTENERS: 'PLAINTEXT://:9092,CONTROLLER://:9093'
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: 'PLAINTEXT:PLAINTEXT,CONTROLLER:PLAINTEXT'
+      KAFKA_ADVERTISED_LISTENERS: 'PLAINTEXT://kafka:9092'
+      KAFKA_CONTROLLER_LISTENER_NAMES: 'CONTROLLER'
+      KAFKA_INTER_BROKER_LISTENER_NAME: 'PLAINTEXT'
+
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: '1'
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: '1'
+
+    healthcheck:
+      test: ['CMD-SHELL', '/opt/kafka/bin/kafka-broker-api-versions.sh --bootstrap-server localhost:9092 >/dev/null 2>&1 || exit 1']
+      interval: '5s'
+      timeout: '10s'
+      retries: 5
+
+  producer:
+    image: 'lab-3/producer:latest'
+    build:
+      context: 'images/producer'
+    command: '--bootstrap-servers kafka:9092 --topic $TOPIC --source /source'
+
+    volumes:
+      - './source:/source:ro'
+
+    depends_on:
+      kafka:
+        condition: 'service_healthy'
+
+  postgres:
+    image: 'postgres:$POSTGRES_TAG'
+
+    environment:
+      POSTGRES_DB: '$POSTGRES_DB'
+      POSTGRES_USER: '$POSTGRES_USER'
+      POSTGRES_PASSWORD: '$POSTGRES_PASSWORD'
+
+    volumes:
+      - './scripts/postgres:/docker-entrypoint-initdb.d:ro'
+
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -d $POSTGRES_DB -U $POSTGRES_USER']
+      interval: '5s'
+      timeout: '10s'
+      retries: 5
+
+  pgadmin:
+    image: 'dpage/pgadmin4:$PGADMIN_TAG'
+
+    environment:
+      PGADMIN_DEFAULT_EMAIL: '$PGADMIN_EMAIL'
+      PGADMIN_DEFAULT_PASSWORD: '$PGADMIN_PASSWORD'
+
+    ports:
+      - '127.0.0.1:$PGADMIN_PORT:80'
+
+    depends_on:
+      postgres:
+        condition: 'service_healthy'
+
+  flink-jobmanager:
+    image: 'lab-3/consumer:latest'
+    build:
+      context: 'images/consumer'
+      args:
+        FLINK_TAG: '${FLINK_TAG}'
+    command: >
+      standalone-job
+      --job-classname oryce.highload.consumer.Main
+      --group.id consumer
+      --kafka.bootstrap.servers kafka:9092
+      --kafka.topic ${TOPIC}
+      --database.url jdbc:postgresql://postgres:5432/${POSTGRES_DB}
+      --database.username ${POSTGRES_USER}
+      --database.password ${POSTGRES_PASSWORD}
+
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+
+    depends_on:
+      kafka:
+        condition: 'service_healthy'
+      postgres:
+        condition: 'service_healthy'
+
+  flink-taskmanager:
+    image: 'lab-3/consumer:latest'
+    command: 'taskmanager'
+
+    environment:
+      FLINK_PROPERTIES: |
+        jobmanager.rpc.address: flink-jobmanager
+        taskmanager.numberOfTaskSlots: 2
+
+    depends_on:
+      - 'flink-jobmanager'
